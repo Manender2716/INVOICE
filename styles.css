@@ -1,0 +1,6 @@
+:root{ --ink:#0f172a; }
+  html,body{ height:100%; }
+  body{ font-family:'Inter',system-ui,sans-serif; background:#f8fafc; color:var(--ink); margin:0; }
+  .scrollx{ overflow-x:auto; }
+  ::-webkit-scrollbar{ height:8px; width:8px; }
+  ::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:8px; }
