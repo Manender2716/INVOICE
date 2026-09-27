@@ -1,4 +1,4 @@
-const {useState} = React;
+import { useEffect, useState } from "react";
 
 /* ---------- icons (inline svg, no deps) ---------- */
 const Icon = ({d, cls="w-4 h-4"}) => (
@@ -23,7 +23,7 @@ const I = {
 };
 
 /* ---------- mock data ---------- */
-const invoices = [
+const sampleInvoices = [
   {id:"INV-2091", vendor:"Amazon Web Services", amount:284560, gst:51221, date:"18 Sep 2026", po:"PO-4471", status:"Approved", conf:98},
   {id:"INV-2092", vendor:"Microsoft", amount:612000, gst:110160, date:"19 Sep 2026", po:"PO-4488", status:"Pending Review", conf:91},
   {id:"INV-2093", vendor:"Infosys", amount:1450000, gst:261000, date:"20 Sep 2026", po:"PO-4502", status:"Exception", conf:76},
@@ -39,6 +39,13 @@ const vendors = [
   {name:"Zoho", gstin:"33AABCZ4567Q1Z1", count:6, total:410000, last:"22 Sep 2026", status:"Active"},
 ];
 const inr = n => "₹" + n.toLocaleString("en-IN");
+
+async function requestJson(url, options = {}) {
+  const response = await fetch(url, { credentials: "same-origin", ...options });
+  const payload = response.status === 204 ? null : await response.json().catch(() => null);
+  if (!response.ok) throw new Error(payload?.error || "The request could not be completed.");
+  return payload;
+}
 
 /* ---------- shared bits ---------- */
 const StatusBadge = ({s}) => {
@@ -107,7 +114,7 @@ function Landing({goApp, goSupplier, goLogin}) {
             <div className="grid grid-cols-4 gap-3 text-xs text-slate-500 mb-2">
               <span>Supplier</span><span>Invoice total</span><span>Buyer PO</span><span>AI checks</span>
             </div>
-            {invoices.slice(0,3).map(inv=>(
+            {sampleInvoices.slice(0,3).map(inv=>(
               <div key={inv.id} className="grid grid-cols-4 gap-3 text-sm py-2 border-t border-slate-100 items-center">
                 <span className="font-medium">{inv.vendor}</span>
                 <span>{inr(inv.amount)}</span>
@@ -166,36 +173,26 @@ function Landing({goApp, goSupplier, goLogin}) {
 }
 
 /* ---------- Login ---------- */
-function saveDemoLogin(email) {
-  const normalizedEmail = email.trim().toLowerCase();
-  const signedInAt = new Date().toISOString();
-  const fallbackUser = {email:normalizedEmail, createdAt:signedInAt, lastLoginAt:signedInAt, signInCount:1};
-
-  try {
-    const parsedUsers = JSON.parse(localStorage.getItem("ledgerai_users") || "[]");
-    const users = Array.isArray(parsedUsers) ? parsedUsers : [];
-    const previousUser = users.find(user => user.email === normalizedEmail);
-    const user = {
-      email:normalizedEmail,
-      createdAt:previousUser ? previousUser.createdAt : signedInAt,
-      lastLoginAt:signedInAt,
-      signInCount:previousUser ? previousUser.signInCount + 1 : 1,
-    };
-    const updatedUsers = users.filter(item => item.email !== normalizedEmail);
-    updatedUsers.push(user);
-    localStorage.setItem("ledgerai_users", JSON.stringify(updatedUsers));
-    localStorage.setItem("ledgerai_current_user", JSON.stringify(user));
-    return {user, persisted:true};
-  } catch {
-    return {user:fallbackUser, persisted:false};
-  }
-}
-
-function LoginPage({onSignIn, onBack}) {
+function LoginPage({onSignIn, onBack, initialMode}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [notice, setNotice] = useState("");
+  const [mode, setMode] = useState(initialMode);
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async event => {
+    event.preventDefault();
+    setSubmitting(true);
+    setNotice("");
+    try {
+      await onSignIn(email, password, mode);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <main className="min-h-screen bg-slate-50 flex flex-col">
@@ -207,9 +204,9 @@ function LoginPage({onSignIn, onBack}) {
         <section className="w-full max-w-md">
           <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 shadow-sm">
             <p className="text-xs font-medium uppercase text-indigo-700">Buyer and supplier workspace</p>
-            <h1 className="text-2xl font-semibold text-slate-900 mt-2">Welcome back</h1>
-            <p className="text-sm text-slate-500 mt-2">Sign in to review invoices and track their status.</p>
-            <form className="mt-6 space-y-4" onSubmit={event=>{event.preventDefault(); onSignIn(email);}}>
+            <h1 className="text-2xl font-semibold text-slate-900 mt-2">{mode === "register" ? "Create your account" : "Welcome back"}</h1>
+            <p className="text-sm text-slate-500 mt-2">{mode === "register" ? "Create an account to manage and review invoices." : "Sign in to review invoices and track their status."}</p>
+            <form className="mt-6 space-y-4" onSubmit={submit}>
               <label className="block text-sm font-medium text-slate-700">
                 Work email
                 <input type="email" autoComplete="username" required value={email} onChange={event=>setEmail(event.target.value)} placeholder="you@company.com" className="mt-1.5 w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"/>
@@ -217,20 +214,19 @@ function LoginPage({onSignIn, onBack}) {
               <label className="block text-sm font-medium text-slate-700">
                 Password
                 <div className="relative mt-1.5">
-                  <input type={showPassword?"text":"password"} autoComplete="current-password" required value={password} onChange={event=>setPassword(event.target.value)} placeholder="Enter your password" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 pr-16 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"/>
+                  <input type={showPassword?"text":"password"} autoComplete={mode === "register" ? "new-password" : "current-password"} minLength={mode === "register" ? 10 : undefined} maxLength={256} required value={password} onChange={event=>setPassword(event.target.value)} placeholder={mode === "register" ? "At least 10 characters" : "Enter your password"} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 pr-16 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"/>
                   <button type="button" onClick={()=>setShowPassword(value=>!value)} className="absolute inset-y-0 right-3 text-xs font-medium text-slate-500 hover:text-slate-800">{showPassword?"Hide":"Show"}</button>
                 </div>
               </label>
-              <div className="flex items-center justify-between text-sm">
-                <label className="flex items-center gap-2 text-slate-600"><input type="checkbox" className="rounded border-slate-300"/> Remember me</label>
-                <button type="button" onClick={()=>setNotice("Password recovery is not connected in this demo.")} className="text-indigo-700 hover:text-indigo-900">Forgot password?</button>
-              </div>
-              {notice && <p role="status" className="text-xs text-amber-700">{notice}</p>}
-              <button type="submit" className="w-full bg-slate-900 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-slate-800">Sign in</button>
+              {notice && <p role="alert" className="text-sm text-rose-700">{notice}</p>}
+              <button type="submit" disabled={submitting} className="w-full bg-slate-900 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-slate-800 disabled:opacity-60">{submitting ? "Please wait..." : mode === "register" ? "Create account" : "Sign in"}</button>
             </form>
-            <p className="mt-5 border-t border-slate-100 pt-4 text-xs leading-5 text-slate-500">Demo only: your email and sign-in times are saved in this browser. Passwords are never saved; authentication is not connected.</p>
+            <p className="mt-5 border-t border-slate-100 pt-4 text-xs leading-5 text-slate-500">Accounts are stored in the local database. Passwords are stored as salted hashes.</p>
           </div>
-          <p className="text-center text-sm text-slate-500 mt-5">New to LedgerAI? <button onClick={onBack} className="font-medium text-indigo-700 hover:text-indigo-900">Explore the product</button></p>
+          <p className="text-center text-sm text-slate-500 mt-5">
+            {mode === "register" ? "Already have an account?" : "New to LedgerAI?"}{" "}
+            <button onClick={()=>{setMode(mode === "register" ? "login" : "register"); setNotice("");}} className="font-medium text-indigo-700 hover:text-indigo-900">{mode === "register" ? "Sign in" : "Create an account"}</button>
+          </p>
         </section>
       </div>
     </main>
@@ -262,7 +258,7 @@ function Sidebar({view, setView, currentUser}) {
     </aside>
   );
 }
-function Topbar({title, goLanding, currentUser}) {
+function Topbar({title, onSignOut, currentUser}) {
   return (
     <div className="h-16 border-b border-slate-200 bg-white flex items-center justify-between px-6">
       <div className="min-w-0">
@@ -274,22 +270,27 @@ function Topbar({title, goLanding, currentUser}) {
           {I.search}<input placeholder="Search invoices, vendors..." className="bg-transparent outline-none w-48"/>
         </div>
         <button className="text-slate-500 hover:text-slate-800">{I.bell}</button>
-        <button onClick={goLanding} className="w-8 h-8 rounded-full bg-slate-900 text-white text-xs flex items-center justify-center font-semibold">AP</button>
+        <button onClick={onSignOut} title="Sign out" aria-label="Sign out" className="w-8 h-8 rounded-full bg-slate-900 text-white text-xs flex items-center justify-center font-semibold">AP</button>
       </div>
     </div>
   );
 }
 
 /* ---------- Dashboard ---------- */
-function Dashboard({openReview}) {
+function Dashboard({openReview, invoices}) {
+  const pendingCount = invoices.filter(invoice => invoice.status === "Pending Review").length;
+  const approvedCount = invoices.filter(invoice => ["Approved", "Paid"].includes(invoice.status)).length;
+  const exceptionCount = invoices.filter(invoice => invoice.status === "Exception").length;
+  const processedAmount = invoices.filter(invoice => ["Approved", "Paid"].includes(invoice.status)).reduce((sum, invoice) => sum + invoice.amount, 0);
+
   return (
     <div className="p-6 space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard label="Total invoices" value="248"/>
-        <StatCard label="Pending review" value="14" sub="needs attention"/>
-        <StatCard label="Approved" value="209"/>
-        <StatCard label="Exceptions" value="6" sub="3 urgent" tone="rose"/>
-        <StatCard label="Amount processed" value="₹3.2Cr" sub="this month"/>
+        <StatCard label="Total invoices" value={invoices.length}/>
+        <StatCard label="Pending review" value={pendingCount} sub={pendingCount ? "needs attention" : "all caught up"}/>
+        <StatCard label="Approved" value={approvedCount}/>
+        <StatCard label="Exceptions" value={exceptionCount} sub={exceptionCount ? "needs attention" : "none"} tone="rose"/>
+        <StatCard label="Amount processed" value={inr(processedAmount)} sub="approved invoices"/>
       </div>
       <div className="bg-white rounded-xl border border-slate-200">
         <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
@@ -452,7 +453,7 @@ function InvoiceTable({rows, onOpen, compact}) {
 }
 
 /* ---------- Invoices page ---------- */
-function InvoicesPage({openReview, openUpload}) {
+function InvoicesPage({invoices, openReview, openUpload}) {
   const [filter, setFilter] = useState("All");
   const [q, setQ] = useState("");
   const tabs = ["All","Pending Review","Approved","Exception","Paid"];
@@ -480,11 +481,26 @@ function InvoicesPage({openReview, openUpload}) {
 }
 
 /* ---------- Upload modal ---------- */
-function UploadModal({onClose, onDone}) {
-  const [stage, setStage] = useState("drop"); // drop -> processing -> extracted
-  const start = () => { setStage("processing"); setTimeout(()=>setStage("extracted"), 1400); };
-  const fields = [["Vendor","Google Cloud"],["Invoice #","INV-2097"],["Invoice date","24 Sep 2026"],["Due date","24 Oct 2026"],
-    ["Subtotal","₹3,10,000"],["GST","₹55,800"],["Total","₹3,65,800"],["PO number","PO-4522"]];
+function UploadModal({onClose, onUpload}) {
+  const [file, setFile] = useState(null);
+  const [form, setForm] = useState({vendor:"", invoiceNumber:"", poNumber:"", amount:"", gst:"0"});
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const inputClass = "w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100";
+  const update = (field, value) => setForm(current => ({...current, [field]:value}));
+  const submit = async event => {
+    event.preventDefault();
+    if (!file) return setError("Choose a PDF, PNG, or JPG invoice file.");
+    setSaving(true);
+    setError("");
+    try {
+      await onUpload(form, file);
+    } catch (uploadError) {
+      setError(uploadError.message);
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-xl w-full max-w-lg shadow-xl">
@@ -492,34 +508,26 @@ function UploadModal({onClose, onDone}) {
           <p className="font-semibold">Upload Invoice</p>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-700">✕</button>
         </div>
-        <div className="p-6">
-          {stage==="drop" && (
-            <div onClick={start} className="border-2 border-dashed border-slate-300 rounded-xl py-14 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/40">
-              <div className="w-10 h-10 mx-auto mb-3 rounded-full bg-slate-100 flex items-center justify-center">{I.upload}</div>
-              <p className="font-medium">Drop your invoice here</p>
-              <p className="text-xs text-slate-500 mt-1">Supports PDF, PNG, JPG · or click to browse</p>
-            </div>
-          )}
-          {stage==="processing" && (
-            <div className="py-14 text-center">
-              <div className="w-8 h-8 mx-auto mb-4 border-2 border-slate-300 border-t-slate-900 rounded-full animate-spin"/>
-              <p className="text-sm text-slate-600">AI is analyzing your invoice...</p>
-            </div>
-          )}
-          {stage==="extracted" && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                {fields.map(([l,v])=>(
-                  <div key={l} className="border border-slate-200 rounded-lg px-3 py-2">
-                    <p className="text-xs text-slate-500">{l}</p>
-                    <p className="text-sm font-medium">{v}</p>
-                  </div>
-                ))}
-              </div>
-              <button onClick={onDone} className="w-full bg-slate-900 text-white py-2.5 rounded-lg text-sm font-medium">Review Invoice</button>
-            </div>
-          )}
-        </div>
+        <form className="p-6 space-y-4" onSubmit={submit}>
+          <label className="block border-2 border-dashed border-slate-300 rounded-xl p-5 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/40">
+            <span className="flex justify-center mb-2">{I.upload}</span>
+            <span className="block text-sm font-medium">{file ? file.name : "Choose an invoice file"}</span>
+            <span className="block text-xs text-slate-500 mt-1">PDF, PNG, or JPG · up to 10 MB</span>
+            <input type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" required className="sr-only" onChange={event=>setFile(event.target.files?.[0] || null)}/>
+          </label>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <label className="text-xs font-medium text-slate-600">Vendor<input required maxLength={160} value={form.vendor} onChange={event=>update("vendor",event.target.value)} className={`${inputClass} mt-1`}/></label>
+            <label className="text-xs font-medium text-slate-600">Invoice number<input required maxLength={80} value={form.invoiceNumber} onChange={event=>update("invoiceNumber",event.target.value)} className={`${inputClass} mt-1`}/></label>
+            <label className="text-xs font-medium text-slate-600">PO number<input maxLength={80} value={form.poNumber} onChange={event=>update("poNumber",event.target.value)} className={`${inputClass} mt-1`}/></label>
+            <label className="text-xs font-medium text-slate-600">Invoice total (INR)<input required type="number" min="0" step="0.01" value={form.amount} onChange={event=>update("amount",event.target.value)} className={`${inputClass} mt-1`}/></label>
+            <label className="text-xs font-medium text-slate-600">GST / tax (INR)<input type="number" min="0" step="0.01" value={form.gst} onChange={event=>update("gst",event.target.value)} className={`${inputClass} mt-1`}/></label>
+          </div>
+          {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose} className="border border-slate-300 px-4 py-2 rounded-lg text-sm" disabled={saving}>Cancel</button>
+            <button type="submit" className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-60" disabled={saving}>{saving ? "Uploading..." : "Upload & review"}</button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -527,7 +535,8 @@ function UploadModal({onClose, onDone}) {
 
 /* ---------- Review page ---------- */
 function ReviewPage({invoice, back}) {
-  const inv = invoice || invoices[2];
+  const inv = invoice;
+  if (!inv) return <div className="p-6"><button onClick={back} className="text-sm text-slate-500 hover:text-slate-800">← Back to invoices</button><p className="mt-6 text-sm text-slate-500">Select an invoice to review.</p></div>;
   const hasException = inv.status === "Exception";
   const checks = [
     ["Vendor verified", true], ["GST calculation correct", true],
@@ -539,14 +548,13 @@ function ReviewPage({invoice, back}) {
       <div className="grid md:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-slate-200 p-4 h-[560px] flex flex-col">
           <p className="text-sm font-semibold mb-3">Invoice document</p>
-          <div className="flex-1 bg-slate-50 border border-slate-200 rounded-lg flex flex-col items-center justify-center text-slate-400 gap-2">
-            {I.file}
-            <p className="text-xs">{inv.id}.pdf preview</p>
+          <div className="flex-1 min-h-0 bg-slate-50 border border-slate-200 rounded-lg overflow-hidden flex items-center justify-center text-slate-400">
+            {inv.fileUrl && /\.pdf$/i.test(inv.fileName || "") ? <iframe title={`${inv.id} invoice PDF`} src={inv.fileUrl} className="w-full h-full"/> : inv.fileUrl ? <img src={inv.fileUrl} alt={`${inv.id} invoice`} className="max-h-full max-w-full object-contain"/> : <p className="text-xs">No uploaded document</p>}
           </div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-5">
           <div>
-            <p className="text-sm font-semibold mb-3">AI extracted information</p>
+            <p className="text-sm font-semibold mb-3">Invoice details</p>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div><p className="text-xs text-slate-500">Vendor</p><p className="font-medium">{inv.vendor}</p></div>
               <div><p className="text-xs text-slate-500">Invoice number</p><p className="font-medium">{inv.id}</p></div>
@@ -683,21 +691,71 @@ function App() {
   const [view, setView] = useState("dashboard");
   const [showUpload, setShowUpload] = useState(false);
   const [reviewInvoice, setReviewInvoice] = useState(null);
-  const [currentUser, setCurrentUser] = useState(()=>{
-    try {
-      return JSON.parse(localStorage.getItem("ledgerai_current_user") || "null");
-    } catch {
-      return null;
-    }
-  });
+  const [currentUser, setCurrentUser] = useState(null);
+  const [invoices, setInvoices] = useState([]);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [loginMode, setLoginMode] = useState("register");
+  const [pendingView, setPendingView] = useState("dashboard");
 
-  if (screen==="landing") return <Landing goApp={()=>setScreen("app")} goSupplier={()=>{setScreen("app"); setView("supplier portal");}} goLogin={()=>setScreen("login")}/>;
-  if (screen==="login") return <LoginPage onSignIn={email=>{
-    const result = saveDemoLogin(email);
-    setCurrentUser(result.user);
+  useEffect(() => {
+    let active = true;
+    requestJson("/api/auth/me")
+      .then(async ({user}) => {
+        if (!user) return;
+        const result = await requestJson("/api/invoices");
+        if (active) {
+          setCurrentUser(user);
+          setInvoices(result.invoices);
+          setScreen("app");
+        }
+      })
+      .catch(() => {})
+      .finally(() => { if (active) setAuthChecking(false); });
+    return () => { active = false; };
+  }, []);
+
+  const handleAuth = async (email, password, mode) => {
+    const {user} = await requestJson(`/api/auth/${mode}`, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({email, password}),
+    });
+    const result = await requestJson("/api/invoices");
+    setCurrentUser(user);
+    setInvoices(result.invoices);
+    setView(pendingView);
     setScreen("app");
-    setView("dashboard");
-  }} onBack={()=>setScreen("landing")}/>;
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await requestJson("/api/auth/logout", {method:"POST"});
+    } finally {
+      setCurrentUser(null);
+      setInvoices([]);
+      setReviewInvoice(null);
+      setScreen("landing");
+    }
+  };
+
+  const handleUpload = async (details, file) => {
+    const body = new FormData();
+    Object.entries(details).forEach(([key, value]) => body.append(key, value));
+    body.append("invoice", file);
+    const {invoice} = await requestJson("/api/invoices", {method:"POST", body});
+    setInvoices(current => [invoice, ...current]);
+    setReviewInvoice(invoice);
+    setShowUpload(false);
+    setView("review");
+  };
+
+  if (authChecking) return <main className="min-h-screen flex items-center justify-center bg-slate-50 text-sm text-slate-500">Loading LedgerAI...</main>;
+  if (screen==="landing") return <Landing
+    goApp={()=>{setLoginMode("register"); setPendingView("dashboard"); setScreen("login");}}
+    goSupplier={()=>{setLoginMode("register"); setPendingView("supplier portal"); setScreen("login");}}
+    goLogin={()=>{setLoginMode("login"); setPendingView("dashboard"); setScreen("login");}}
+  />;
+  if (screen==="login") return <LoginPage onSignIn={handleAuth} initialMode={loginMode} onBack={()=>setScreen("landing")}/>;
 
   const titles = {dashboard:"Overview", invoices:"Invoices", "supplier portal":"Supplier portal", review:"Invoice Review", vendors:"Vendors", "purchase orders":"Purchase Orders", reports:"Reports", settings:"Settings"};
 
@@ -705,10 +763,10 @@ function App() {
     <div className="h-screen flex bg-slate-50">
       <Sidebar view={view} setView={v=>{setView(v); if(v!=="review") setReviewInvoice(null);}} currentUser={currentUser}/>
       <div className="flex-1 flex flex-col min-w-0">
-        <Topbar title={titles[view]||"Overview"} goLanding={()=>setScreen("landing")} currentUser={currentUser}/>
+        <Topbar title={titles[view]||"Overview"} onSignOut={handleSignOut} currentUser={currentUser}/>
         <div className="flex-1 overflow-y-auto">
-          {view==="dashboard" && <Dashboard openReview={inv=>{setReviewInvoice(inv); setView("review");}}/>}
-          {view==="invoices" && <InvoicesPage openReview={inv=>{setReviewInvoice(inv); setView("review");}} openUpload={()=>setShowUpload(true)}/>}
+          {view==="dashboard" && <Dashboard invoices={invoices} openReview={inv=>{setReviewInvoice(inv); setView("review");}}/>}
+          {view==="invoices" && <InvoicesPage invoices={invoices} openReview={inv=>{setReviewInvoice(inv); setView("review");}} openUpload={()=>setShowUpload(true)}/>}
           {view==="supplier portal" && <SupplierPreflight/>}
           {view==="review" && <ReviewPage invoice={reviewInvoice} back={()=>setView("invoices")}/>}
           {view==="vendors" && <VendorsPage/>}
@@ -720,9 +778,9 @@ function App() {
           )}
         </div>
       </div>
-      {showUpload && <UploadModal onClose={()=>setShowUpload(false)} onDone={()=>{setShowUpload(false); setView("invoices");}}/>}
+      {showUpload && <UploadModal onClose={()=>setShowUpload(false)} onUpload={handleUpload}/>}
     </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+export default App;

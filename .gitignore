@@ -1,0 +1,5 @@
+node_modules/
+dist/
+data/
+login_data/
+.DS_Store
